@@ -33,7 +33,7 @@ class Reading(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     device_id: Mapped[str] = mapped_column(String(64), ForeignKey("devices.device_id"))
     sensor_type: Mapped[str] = mapped_column(String(32))
-    measured_at: Mapped[str] = mapped_column(DateTime(fsp=6))
+    measured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     value: Mapped[float]
     aqi: Mapped[int | None] = mapped_column(Integer, nullable=True)
     alert_flag: Mapped[bool] = mapped_column(Boolean, default=False)
