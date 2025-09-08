@@ -1,4 +1,10 @@
 # app/routers/readings.py (only the changed parts)
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session   # ✅ needed for type hints and DB session
+from ..database import get_db
+from ..models import Reading, PollutantThreshold
+from ..schemas import ReadingIn, ReadingOut
+from ..deps import get_api_key, get_idempotency_key
 from ..aqi import compute_aqi
 
 def compute_alert(db: Session, sensor_type: str, value: float):
