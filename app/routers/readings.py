@@ -1,11 +1,13 @@
-# app/routers/readings.py (only the changed parts)
+# app/routers/readings.py
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session   # ✅ needed for type hints and DB session
+from sqlalchemy.orm import Session
 from ..database import get_db
-from ..models import Reading, PollutantThreshold
+from ..models import Reading, Device, PollutantThreshold, IdempotencyKey
 from ..schemas import ReadingIn, ReadingOut
 from ..deps import get_api_key, get_idempotency_key
 from ..aqi import compute_aqi
+
+router = APIRouter(tags=["readings"])
 
 def compute_alert(db: Session, sensor_type: str, value: float):
     """
@@ -16,7 +18,6 @@ def compute_alert(db: Session, sensor_type: str, value: float):
     if aqi is not None:
         return aqi, (aqi >= 101), cat
 
-    # Fallback to your thresholds table if AQI not defined for this sensor
     th = db.query(PollutantThreshold).filter_by(sensor_type=sensor_type).first()
     if not th:
         return None, False, None
@@ -27,11 +28,37 @@ def create_reading(
     body: ReadingIn,
     db: Session = Depends(get_db),
     api_key: str = Depends(get_api_key),
-    idem_key: str = Depends(get_idempotency_key),
+    idem_key: str | None = Depends(get_idempotency_key),
 ):
+    # Ensure device exists
+    dev = db.query(Device).filter_by(device_id=body.device_id).first()
+    if not dev:
+        raise HTTPException(status_code=404, detail="Device not found. Insert into devices first.")
+
+    # Idempotency handling
+    if idem_key:
+        existing = db.query(IdempotencyKey).filter_by(key=idem_key).first()
+        from hashlib import sha256
+        payload_hash = sha256(str(sorted(body.dict().items())).encode()).hexdigest()
+        if existing:
+            if existing.request_hash != payload_hash:
+                raise HTTPException(status_code=409, detail="Idempotency key reuse with different payload")
+            # if same, return existing reading if present
+            r0 = db.query(Reading).filter_by(idempotency_key=idem_key).order_by(Reading.id.desc()).first()
+            if r0:
+                return ReadingOut(
+                    id=r0.id, device_id=r0.device_id, sensor_type=r0.sensor_type,
+                    measured_at=r0.measured_at, value=r0.value, aqi=r0.aqi,
+                    alert_flag=r0.alert_flag, aqi_category=compute_aqi(r0.sensor_type, r0.value)[1] if r0.aqi is not None else None
+                )
+        else:
+            db.add(IdempotencyKey(key=idem_key, request_hash=payload_hash, status="in_progress"))
+            db.flush()
+
     # Compute AQI + alert
     aqi, alert, aqi_cat = compute_alert(db, body.sensor_type, body.value)
 
+    # Insert
     try:
         r = Reading(
             device_id=body.device_id,
@@ -48,17 +75,26 @@ def create_reading(
         db.refresh(r)
     except Exception:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Conflict: duplicate or invalid insert")
+        # unique constraint fallback
+        exist = db.query(Reading).filter_by(
+            device_id=body.device_id, sensor_type=body.sensor_type, measured_at=body.measured_at
+        ).first()
+        if exist:
+            return ReadingOut(
+                id=exist.id, device_id=exist.device_id, sensor_type=exist.sensor_type,
+                measured_at=exist.measured_at, value=exist.value, aqi=exist.aqi,
+                alert_flag=exist.alert_flag, aqi_category=compute_aqi(exist.sensor_type, exist.value)[1] if exist.aqi is not None else None
+            )
+        raise
+
+    if idem_key:
+        db.query(IdempotencyKey).filter_by(key=idem_key).update({"status": "succeeded"})
+        db.commit()
 
     return ReadingOut(
-        id=r.id,
-        device_id=r.device_id,
-        sensor_type=r.sensor_type,
-        measured_at=r.measured_at,
-        value=r.value,
-        aqi=r.aqi,
-        alert_flag=r.alert_flag,
-        aqi_category=aqi_cat,
+        id=r.id, device_id=r.device_id, sensor_type=r.sensor_type,
+        measured_at=r.measured_at, value=r.value, aqi=r.aqi,
+        alert_flag=r.alert_flag, aqi_category=aqi_cat
     )
 
 @router.get("/devices/{device_id}/readings", response_model=list[ReadingOut])
@@ -68,7 +104,6 @@ def list_readings(
     db: Session = Depends(get_db),
     api_key: str = Depends(get_api_key),
 ):
-    # Query the DB for recent readings for this device
     rows = (
         db.query(Reading)
         .filter(Reading.device_id == device_id)
@@ -76,8 +111,6 @@ def list_readings(
         .limit(limit)
         .all()
     )
-
-    # Return API model with AQI category string attached
     return [
         ReadingOut(
             id=r.id,
@@ -87,9 +120,7 @@ def list_readings(
             value=r.value,
             aqi=r.aqi,
             alert_flag=r.alert_flag,
-            aqi_category=compute_aqi(r.sensor_type, r.value)[1]
-            if r.aqi is not None
-            else None,
+            aqi_category=compute_aqi(r.sensor_type, r.value)[1] if r.aqi is not None else None,
         )
         for r in rows
     ]
