@@ -17,12 +17,15 @@ def compute_alert(db: Session, sensor_type: str, value: float):
     return None, (value >= th.warn), None
 
 @router.post("/readings", response_model=ReadingOut)
-def create_reading(...):
-    ...
+def create_reading(
+    body: ReadingIn,
+    db: Session = Depends(get_db),
+    api_key: str = Depends(get_api_key),
+    idem_key: str = Depends(get_idempotency_key),
+):
     # Compute AQI + alert
     aqi, alert, aqi_cat = compute_alert(db, body.sensor_type, body.value)
 
-    # Insert reading
     try:
         r = Reading(
             device_id=body.device_id,
@@ -38,8 +41,9 @@ def create_reading(...):
         db.commit()
         db.refresh(r)
     except Exception:
-        ...
-    ...
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Conflict: duplicate or invalid insert")
+
     return ReadingOut(
         id=r.id,
         device_id=r.device_id,
@@ -48,7 +52,7 @@ def create_reading(...):
         value=r.value,
         aqi=r.aqi,
         alert_flag=r.alert_flag,
-        aqi_category=aqi_cat,   # <-- include in response
+        aqi_category=aqi_cat,
     )
 
 @router.get("/devices/{device_id}/readings", response_model=list[ReadingOut])
