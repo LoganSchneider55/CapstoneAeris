@@ -56,8 +56,22 @@ def create_reading(
     )
 
 @router.get("/devices/{device_id}/readings", response_model=list[ReadingOut])
-def list_readings(...):
-    ...
+def list_readings(
+    device_id: str,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    api_key: str = Depends(get_api_key),
+):
+    # Query the DB for recent readings for this device
+    rows = (
+        db.query(Reading)
+        .filter(Reading.device_id == device_id)
+        .order_by(Reading.measured_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    # Return API model with AQI category string attached
     return [
         ReadingOut(
             id=r.id,
@@ -67,6 +81,9 @@ def list_readings(...):
             value=r.value,
             aqi=r.aqi,
             alert_flag=r.alert_flag,
-            aqi_category=compute_aqi(r.sensor_type, r.value)[1] if r.aqi is not None else None
-        ) for r in rows
+            aqi_category=compute_aqi(r.sensor_type, r.value)[1]
+            if r.aqi is not None
+            else None,
+        )
+        for r in rows
     ]
