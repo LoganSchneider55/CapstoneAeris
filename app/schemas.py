@@ -15,3 +15,4 @@ class ReadingOut(BaseModel):
     value: float
     aqi: int | None
     alert_flag: bool
+    aqi_category: str | None = None
