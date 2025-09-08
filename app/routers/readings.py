@@ -1,11 +1,12 @@
 # app/routers/readings.py
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Reading, Device, PollutantThreshold, IdempotencyKey
 from ..schemas import ReadingIn, ReadingOut
 from ..deps import get_api_key, get_idempotency_key
 from ..aqi import compute_aqi
+from datetime import datetime
 
 router = APIRouter(tags=["readings"])
 
@@ -100,27 +101,23 @@ def create_reading(
 @router.get("/devices/{device_id}/readings", response_model=list[ReadingOut])
 def list_readings(
     device_id: str,
-    limit: int = 50,
+    frm: datetime | None = Query(default=None, alias="from"),
+    to: datetime | None = Query(default=None),
+    sensor_type: str | None = None,
+    limit: int = 200,
     db: Session = Depends(get_db),
     api_key: str = Depends(get_api_key),
 ):
-    rows = (
-        db.query(Reading)
-        .filter(Reading.device_id == device_id)
-        .order_by(Reading.measured_at.desc())
-        .limit(limit)
-        .all()
-    )
+    q = db.query(Reading).filter(Reading.device_id == device_id)
+    if sensor_type: q = q.filter(Reading.sensor_type == sensor_type)
+    if frm:         q = q.filter(Reading.measured_at >= frm)
+    if to:          q = q.filter(Reading.measured_at < to)
+    rows = q.order_by(Reading.measured_at.desc()).limit(limit).all()
     return [
         ReadingOut(
-            id=r.id,
-            device_id=r.device_id,
-            sensor_type=r.sensor_type,
-            measured_at=r.measured_at,
-            value=r.value,
-            aqi=r.aqi,
+            id=r.id, device_id=r.device_id, sensor_type=r.sensor_type,
+            measured_at=r.measured_at, value=r.value, aqi=r.aqi,
             alert_flag=r.alert_flag,
             aqi_category=compute_aqi(r.sensor_type, r.value)[1] if r.aqi is not None else None,
-        )
-        for r in rows
+        ) for r in rows
     ]
