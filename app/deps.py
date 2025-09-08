@@ -11,3 +11,7 @@ def get_api_key(authorization: str | None = Header(default=None), db: Session = 
     if not api_key or api_key.revoked:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
     return key
+
+def get_idempotency_key(x_idempotency_key: str | None = Header(default=None, alias="X-Idempotency-Key")) -> str | None:
+    # Optional header. Return None if not provided.
+    return x_idempotency_key
