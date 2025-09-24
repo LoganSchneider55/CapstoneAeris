@@ -10,6 +10,34 @@ from datetime import datetime
 
 router = APIRouter(tags=["readings"])
 
+@router.get("/devices/{device_id}/history")
+def get_history(
+    device_id: str,
+    minutes: int = Query(120, ge=1, le=525600),
+    db: Session = Depends(get_db),
+    api_key: str = Depends(get_api_key),
+):
+    since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+    rows = (
+        db.query(Reading.sensor_type, Reading.measured_at, Reading.value)
+        .filter(Reading.device_id == device_id, Reading.measured_at >= since)
+        .order_by(Reading.measured_at.asc())
+        .all()
+    )
+
+    # Return a frontend-friendly shape
+    return {
+        "rows": [
+            {
+                "sensor_type": st,
+                "measured_at": ts.isoformat().replace("+00:00", "Z") if hasattr(ts, "isoformat") else str(ts),
+                "value": float(val) if val is not None else None,
+            }
+            for (st, ts, val) in rows
+        ]
+    }
+
 def compute_alert(db: Session, sensor_type: str, value: float):
     """
     Return (aqi:int|None, alert:bool, aqi_category:str|None)
