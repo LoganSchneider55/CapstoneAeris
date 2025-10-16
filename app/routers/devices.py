@@ -36,7 +36,8 @@ def register_device(
     db.commit()
     return {"ok": True, "created": True, "device_id": body.device_id}
 
-# ---------- NEW: latest per sensor ----------
+
+# ---------- UPDATED: latest per sensor ----------
 @router.get("/devices/{device_id}/latest")
 def get_latest_per_sensor(
     device_id: str,
@@ -45,7 +46,7 @@ def get_latest_per_sensor(
 ):
     """
     Returns the most recent reading for each sensor_type for this device.
-    Shape: { temperature, humidity, pressure, pm25, voc, co, measured_at }
+    Shape: { temperature_c, humidity, pressure_hpa, pm1_ugm3, pm25_ugm3, pm10_ugm3, voc_index, co_ppm, measured_at }
     """
 
     # subquery: max(measured_at) per sensor_type for this device
@@ -74,17 +75,24 @@ def get_latest_per_sensor(
     )
 
     if not rows:
-        # 404 is fine; your React handles empty/404 gracefully
         raise HTTPException(status_code=404, detail="No readings found for this device")
 
-    # map DB sensor_type -> frontend keys
+    # --- updated alias map: keep existing names but add new ones ---
     alias = {
-        "pm25": "pm25",
-        "voc": "voc",
-        "co": "co",
-        "temperature_c": "temperature",
+        # Environmental
+        "temperature_c": "temperature_c",
         "humidity": "humidity",
-        "pressure_hpa": "pressure",
+        "pressure_hpa": "pressure_hpa",
+
+        # Particulate sensors
+        "pm1_ugm3": "pm1_ugm3",
+        "pm25_ugm3": "pm25_ugm3",
+        "pm10_ugm3": "pm10_ugm3",
+
+        # VOC + CO
+        "voc_index": "voc_index",
+        "co_ppm": "co_ppm",
+        "Co_ppm": "co_ppm",  # tolerate inconsistent casing
     }
 
     out = {}
@@ -94,14 +102,13 @@ def get_latest_per_sensor(
         if not key:
             continue
         out[key] = float(value)
-        # track the newest timestamp among sensors
+        # track newest timestamp
         if latest_ts is None or str(measured_at) > str(latest_ts):
             latest_ts = measured_at
 
     if latest_ts is not None:
         out["measured_at"] = str(latest_ts)
 
-    # if you store fan status somewhere, set it here; else default False
     out.setdefault("fanStatus", False)
 
     return out
