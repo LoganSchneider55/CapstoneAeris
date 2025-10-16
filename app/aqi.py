@@ -48,6 +48,15 @@ TABLES = {
     "co":   CO_8H,  # value must be in ppm
 }
 
+# Device payload label -> canonical pollutant key used for AQI/thresholds
+# (We still store the ORIGINAL sensor_type in the DB; this is only for AQI lookup.)
+SENSOR_ALIASES = {
+    "pm25_ugm3": "pm25",
+    "pm10_ugm3": "pm10",
+    "co_ppm":    "co",
+    "co":        "co",
+}
+
 def _interp(c_low: float, c_high: float, i_low: int, i_high: int, c: float) -> int:
     # Linear interpolation per EPA formula, rounded to nearest integer
     if c_high == c_low:
@@ -55,15 +64,27 @@ def _interp(c_low: float, c_high: float, i_low: int, i_high: int, c: float) -> i
     aqi = (i_high - i_low) / (c_high - c_low) * (c - c_low) + i_low
     return int(round(aqi))
 
+def canonical_pollutant(sensor_type: Optional[str]) -> Optional[str]:
+    """
+    Map an incoming sensor_type string (e.g., 'pm25_ugm3', 'co_ppm') to the
+    canonical pollutant key this module knows AQI tables for ('pm25','pm10','co','o3').
+    Returns None if unsupported.
+    """
+    if not sensor_type:
+        return None
+    st = SENSOR_ALIASES.get(sensor_type.strip().lower(), sensor_type.strip().lower())
+    return st if st in TABLES else None
+
 def compute_aqi(sensor_type: str, value: float) -> Tuple[Optional[int], str]:
     """
-    Returns (aqi, category). If sensor_type unsupported or out of range, returns (None, "Unknown").
+    Returns (aqi, category). If sensor_type unsupported or out of range, returns (None, "Unknown"/"Out of range").
+    Accepts device labels (e.g., 'pm25_ugm3', 'pm10_ugm3', 'co_ppm') transparently.
     """
-    st = sensor_type.lower()
-    table = TABLES.get(st)
-    if not table:
+    key = canonical_pollutant(sensor_type)
+    if not key:
         return None, "Unknown"
 
+    table = TABLES[key]
     for c_low, c_high, i_low, i_high, cat in table:
         if c_low <= value <= c_high:
             return _interp(c_low, c_high, i_low, i_high, value), cat
