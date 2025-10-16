@@ -43,18 +43,20 @@ def create_reading(
     threshold_key = canonical_pollutant(raw_type) or raw_type
     threshold = (
         db.query(models.PollutantThreshold)
-        .filter(models.PollutantThreshold.sensor_type == threshold_key)
-        .one_or_none()
+          .filter(models.PollutantThreshold.sensor_type == threshold_key)
+          .one_or_none()
     )
-
+    
     alert_flag = 0
     if threshold:
-        warn = threshold.warn_value
-        danger = threshold.danger_value
+        # ✅ Use your actual column names: warn, danger
+        warn = getattr(threshold, "warn", None)
+        danger = getattr(threshold, "danger", None)
         if danger is not None and reading.value >= danger:
             alert_flag = 2
         elif warn is not None and reading.value >= warn:
             alert_flag = 1
+
 
     # --- Optionally touch device's last_seen_at if the device exists
     device = db.query(models.Device).filter(models.Device.device_id == reading.device_id).one_or_none()
