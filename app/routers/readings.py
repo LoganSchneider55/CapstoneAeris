@@ -27,8 +27,8 @@ router = APIRouter(tags=["readings"])
 def create_reading(
     reading: schemas.ReadingIn,
     db: Session = Depends(get_db),
-    api_key: models.APIKey = Depends(deps.get_api_key),                  # Authorization: Bearer <key>
-    idempo_key: Optional[str] = Depends(deps.get_idempotency_key),       # X-Idempotency-Key (optional)
+    api_key: str = Depends(deps.get_api_key),                  # <-- returns a STRING, not a model
+    idempo_key: Optional[str] = Depends(deps.get_idempotency_key),  # X-Idempotency-Key (optional)
 ):
     """
     Ingest one reading. Keeps the RAW sensor_type exactly as sent.
@@ -46,10 +46,10 @@ def create_reading(
           .filter(models.PollutantThreshold.sensor_type == threshold_key)
           .one_or_none()
     )
-    
+
     alert_flag = 0
     if threshold:
-        # ✅ Use your actual column names: warn, danger
+        # columns are 'warn' and 'danger' in your schema
         warn = getattr(threshold, "warn", None)
         danger = getattr(threshold, "danger", None)
         if danger is not None and reading.value >= danger:
@@ -57,15 +57,12 @@ def create_reading(
         elif warn is not None and reading.value >= warn:
             alert_flag = 1
 
-
     # --- Optionally touch device's last_seen_at if the device exists
     device = db.query(models.Device).filter(models.Device.device_id == reading.device_id).one_or_none()
     if device:
         try:
-            # use the reading's timestamp; assume it's UTC ISO-8601 in schemas.ReadingIn
             device.last_seen_at = reading.measured_at
         except Exception:
-            # be graceful if anything odd about the timestamp object
             device.last_seen_at = datetime.utcnow()
 
     # --- Build the row (store RAW sensor_type)
@@ -76,7 +73,7 @@ def create_reading(
         value=reading.value,
         aqi=aqi_val,                      # may be None for unsupported sensors (pm1_ugm3, voc_index, etc.)
         alert_flag=alert_flag,
-        api_key=api_key.key,              # record which key wrote it (matches your schema)
+        api_key=api_key,                  # <-- store the STRING key directly
         idempotency_key=idempo_key,       # optional; unique if you enforce it
     )
 
@@ -86,7 +83,6 @@ def create_reading(
         db.commit()
         db.refresh(row)
     except IntegrityError:
-        # Duplicate insert (same device_id/sensor_type/measured_at) → return the existing row
         db.rollback()
         existing = (
             db.query(models.Reading)
@@ -96,7 +92,6 @@ def create_reading(
             .one_or_none()
         )
         if not existing:
-            # If somehow we failed to find it, raise a 409 to be explicit
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Duplicate reading and existing row could not be retrieved."
@@ -108,9 +103,6 @@ def create_reading(
     out.aqi_category = aqi_category if aqi_val is not None else "Unknown"
     return out
 
-
-# (Optional) Keep a simple history endpoint here if your original file had it.
-# If your original project already defines history elsewhere, you can delete this.
 
 @router.get(
     "/devices/{device_id}/history",
@@ -125,7 +117,7 @@ def get_history(
     until: Optional[datetime] = None,
     limit: int = 500,
     db: Session = Depends(get_db),
-    _api_key: models.APIKey = Depends(deps.get_api_key),  # keep same auth behavior as the rest of your API
+    _api_key: str = Depends(deps.get_api_key),  # keep same auth behavior as the rest of your API
 ):
     """
     Basic history: filter by device, optional sensor_type and time window.
@@ -136,21 +128,17 @@ def get_history(
     if sensor_type:
         q = q.filter(models.Reading.sensor_type == sensor_type)
 
-    # Time window: prefer explicit since/until; otherwise support 'minutes'
     if since:
         q = q.filter(models.Reading.measured_at >= since)
     if until:
         q = q.filter(models.Reading.measured_at <= until)
     if minutes and not since and not until:
-        # recent N minutes from "now" (DB time context)
-        # If your original used UTC_TIMESTAMP(6) semantics, keep it as-is there.
         cutoff = datetime.utcnow()
         q = q.filter(models.Reading.measured_at >= cutoff.replace(microsecond=0))
 
     q = q.order_by(models.Reading.measured_at.desc()).limit(max(1, min(limit, 5000)))
     rows = q.all()
 
-    # Attach AQI category dynamically for convenience
     out: List[schemas.ReadingOut] = []
     for r in rows:
         item = schemas.ReadingOut.from_orm(r)
