@@ -15,7 +15,7 @@ from .. import models, schemas, deps
 from ..aqi import compute_aqi, canonical_pollutant
 from ..database import get_db
 
-router = APIRouter(prefix="/v1", tags=["readings"])
+router = APIRouter(tags=["readings"])
 
 
 @router.post(
