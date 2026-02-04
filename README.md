@@ -1,5 +1,7 @@
 # Live Demo
+View the deployed application here:  
 https://aeris-one.vercel.app/
+
 
 # Getting Started with Create React App
 
